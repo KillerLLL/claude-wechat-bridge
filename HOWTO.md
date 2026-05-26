@@ -257,3 +257,45 @@ npm start
 - 媒体加密：AES-128-ECB（本版仅支持文本）
 
 源码：https://github.com/Tencent/openclaw-weixin
+
+---
+
+## 快速部署（给别人的精简步骤）
+
+拿到项目代码后，按顺序执行以下命令即可部署：
+
+```bash
+# 1. 安装依赖
+cd claude-wechat-bridge
+npm install
+
+# 2. 安装 OpenClaw（获取微信 Token 必须用）
+npm install -g openclaw
+npx -y @tencent-weixin/openclaw-weixin-cli install
+openclaw config set plugins.entries.openclaw-weixin.enabled true
+
+# 3. 扫码登录（用微信扫：我 → 设置 → 插件 → ClawBot → 扫码确认）
+node gen-qrcode.mjs
+# 会生成 qrcode.svg，在浏览器打开扫码
+
+# 4. 读取 Token 和 UserId
+# 扫码成功后执行：
+ls ~/.openclaw/openclaw-weixin/accounts/
+# 找到 json 文件，查看里面的 token 和 userId
+cat ~/.openclaw/openclaw-weixin/accounts/<accountId>.json
+
+# 5. 配置环境变量
+cp .env.example .env
+# 编辑 .env，填入以下三项（其他不用改）：
+#   ANTHROPIC_API_KEY=你的AI密钥
+#   WECHAT_TOKEN=上一步拿到的token
+#   WECHAT_USER_ID=上一步拿到的userId
+
+# 6. 启动
+npm start
+```
+
+**注意：**
+- 需要先安装 Node.js >= 22
+- AI API Key 需要自己申请（支持智谱、Anthropic 等兼容 API）
+- 微信 Token 会过期，过期后重新执行步骤 3-5
