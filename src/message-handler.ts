@@ -1,0 +1,118 @@
+import type { Config } from "./config.js";
+import type { WeixinApi } from "./weixin-api.js";
+import type { ClaudeClient } from "./claude-client.js";
+import type { SessionStore } from "./session-store.js";
+import type { WeixinMessage } from "./weixin-types.js";
+import { MessageType, MessageItemType, TypingStatus } from "./weixin-types.js";
+import { logger } from "./logger.js";
+
+// 消息去重：记录最近处理过的 message_id
+const recentIds = new Set<number>();
+const MAX_RECENT = 200;
+
+export class MessageHandler {
+  constructor(
+    private config: Config,
+    private weixinApi: WeixinApi,
+    private claudeClient: ClaudeClient,
+    private sessions: SessionStore,
+  ) {}
+
+  async onMessage(msg: WeixinMessage): Promise<void> {
+    // 只处理用户发送的消息（不处理 BOT 回复）
+    if (msg.message_type !== MessageType.USER) return;
+
+    // 去重
+    if (msg.message_id != null) {
+      const id = msg.message_id;
+      if (recentIds.has(id)) return;
+      recentIds.add(id);
+      if (recentIds.size > MAX_RECENT) {
+        const oldest = recentIds.values().next().value as number;
+        recentIds.delete(oldest);
+      }
+    }
+
+    // 提取文本内容
+    const textItem = msg.item_list?.find(
+      (item) => item.type === MessageItemType.TEXT && item.text_item?.text,
+    );
+    if (!textItem?.text_item?.text) return;
+
+    const text = textItem.text_item.text.trim();
+    if (!text) return;
+
+    const sessionId = msg.session_id ?? "default";
+    const fromUserId = msg.from_user_id ?? "";
+    const contextToken = msg.context_token ?? "";
+
+    logger.info("收到消息", {
+      from: fromUserId,
+      text: text.substring(0, 100),
+      session: sessionId,
+      contextToken: contextToken || "(empty)",
+      messageId: msg.message_id,
+      messageType: msg.message_type,
+      messageState: msg.message_state,
+    });
+
+    // 更新会话上下文
+    this.sessions.setContextToken(sessionId, contextToken);
+
+    // 添加用户消息到历史
+    this.sessions.addUserMessage(sessionId, text);
+
+    // 发送"正在输入"
+    await this.sendTypingIndicator(sessionId, fromUserId, TypingStatus.TYPING);
+
+    // 调用 Claude 生成回复
+    let response: string;
+    try {
+      const history = this.sessions.getMessages(sessionId);
+      response = await this.claudeClient.generateResponse(history);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.error("Claude API 调用失败", { error: errMsg });
+      response = "抱歉，处理消息时遇到了错误，请稍后再试。";
+    }
+
+    // 裁剪历史
+    this.sessions.trimToMaxHistory(sessionId, this.config.MAX_HISTORY);
+
+    // 添加助手回复到历史
+    this.sessions.addAssistantMessage(sessionId, response);
+
+    // 取消"正在输入"
+    await this.sendTypingIndicator(sessionId, fromUserId, TypingStatus.CANCEL);
+
+    // 发送回复
+    try {
+      const currentToken = this.sessions.getContextToken(sessionId);
+      await this.weixinApi.sendMessage(fromUserId, currentToken, response);
+      logger.info("已发送回复", { to: fromUserId, length: response.length });
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.error("发送消息失败", { error: errMsg });
+    }
+  }
+
+  private async sendTypingIndicator(
+    sessionId: string,
+    userId: string,
+    status: number,
+  ): Promise<void> {
+    try {
+      let ticket = this.sessions.getTypingTicket(sessionId);
+      if (!ticket) {
+        const config = await this.weixinApi.getConfig(userId);
+        ticket = config.typing_ticket;
+        if (ticket) this.sessions.setTypingTicket(sessionId, ticket);
+      }
+      if (ticket) {
+        await this.weixinApi.sendTyping(userId, ticket, status);
+      }
+    } catch {
+      // typing indicator 非关键，静默忽略
+    }
+  }
+}

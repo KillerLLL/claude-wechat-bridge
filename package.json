@@ -1,0 +1,26 @@
+{
+  "name": "claude-wechat-bridge",
+  "version": "1.0.0",
+  "description": "Bridge WeChat messages to Claude AI via openclaw-weixin protocol",
+  "type": "module",
+  "ilink_appid": "bot",
+  "scripts": {
+    "start": "node --import tsx src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "dotenv": "^16.5.0",
+    "qrcode": "^1.5.4",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
+  }
+}
