@@ -6,18 +6,37 @@ import type { WeixinMessage } from "./weixin-types.js";
 import { MessageType, MessageItemType, TypingStatus } from "./weixin-types.js";
 import { logger } from "./logger.js";
 import { decryptImage } from "./image-decryptor.js";
+import { WebSearchClient } from "./web-search.js";
+
+const SEARCH_KEYWORDS = [
+  "新闻", "最新", "今天", "天气", "时事", "热点", "发生了什么",
+  "最近", "当前", "现在", "实时", "行情", "股价", "汇率", "比分",
+  "疫情", "通知", "公告", "上映", "播出", "比赛", "结果",
+  "多少钱", "价格", "排名", "榜单",
+];
+
+function needsSearch(text: string): boolean {
+  return SEARCH_KEYWORDS.some((kw) => text.includes(kw));
+}
 
 // 消息去重：记录最近处理过的 message_id
 const recentIds = new Set<number>();
 const MAX_RECENT = 200;
 
 export class MessageHandler {
+  private webSearch: WebSearchClient | null;
+
   constructor(
     private config: Config,
     private weixinApi: WeixinApi,
     private claudeClient: ClaudeClient,
     private sessions: SessionStore,
-  ) {}
+  ) {
+    this.webSearch =
+      config.WEB_SEARCH_API_KEY && config.WEB_SEARCH_ENDPOINT
+        ? new WebSearchClient(config.WEB_SEARCH_ENDPOINT, config.WEB_SEARCH_API_KEY)
+        : null;
+  }
 
   async onMessage(msg: WeixinMessage): Promise<void> {
     // 只处理用户发送的消息（不处理 BOT 回复）
@@ -68,7 +87,9 @@ export class MessageHandler {
 
     // 构建消息内容
     let userContent: MessageContent;
+    let useVision = false;
     if (imageMsgItem) {
+      useVision = true;
       const blocks: Extract<MessageContent, Array<unknown>> = [];
 
       const decrypted = await decryptImage(imageMsgItem.image_item!);
@@ -105,8 +126,15 @@ export class MessageHandler {
     // 调用 Claude 生成回复
     let response: string;
     try {
+      // 关键词触发搜索
+      let searchContext = "";
+      if (this.webSearch && text && needsSearch(text)) {
+        logger.info("触发联网搜索", { query: text });
+        searchContext = await this.webSearch.search(text);
+      }
+
       const history = this.sessions.getMessages(sessionId);
-      response = await this.claudeClient.generateResponse(history);
+      response = await this.claudeClient.generateResponse(history, useVision, searchContext);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       logger.error("Claude API 调用失败", { error: errMsg });
