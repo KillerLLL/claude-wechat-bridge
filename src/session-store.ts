@@ -1,6 +1,10 @@
+import type { ContentBlockParam } from "@anthropic-ai/sdk/resources/messages/messages.js";
+
+export type MessageContent = string | ContentBlockParam[];
+
 export interface ClaudeMessage {
   role: "user" | "assistant";
-  content: string;
+  content: MessageContent;
 }
 
 interface Session {
@@ -26,9 +30,9 @@ export class SessionStore {
     return this.getOrCreate(sessionId).messages;
   }
 
-  addUserMessage(sessionId: string, text: string): void {
+  addUserMessage(sessionId: string, content: MessageContent): void {
     const s = this.getOrCreate(sessionId);
-    s.messages.push({ role: "user", content: text });
+    s.messages.push({ role: "user", content });
     s.lastActivity = Date.now();
   }
 

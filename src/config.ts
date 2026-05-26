@@ -11,6 +11,8 @@ const envSchema = z.object({
   MAX_HISTORY: z.coerce.number().int().positive().default(20),
   CLAUDE_MAX_TOKENS: z.coerce.number().int().positive().default(4096),
   LOG_LEVEL: z.enum(["DEBUG", "INFO", "WARN", "ERROR"]).default("INFO"),
+  IMAGE_MAX_SIZE_BYTES: z.coerce.number().int().positive().default(4 * 1024 * 1024),
+  IMAGE_DOWNLOAD_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
 });
 
 export type Config = z.infer<typeof envSchema>;

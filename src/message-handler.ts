@@ -1,10 +1,11 @@
 import type { Config } from "./config.js";
 import type { WeixinApi } from "./weixin-api.js";
 import type { ClaudeClient } from "./claude-client.js";
-import type { SessionStore } from "./session-store.js";
+import type { SessionStore, MessageContent } from "./session-store.js";
 import type { WeixinMessage } from "./weixin-types.js";
 import { MessageType, MessageItemType, TypingStatus } from "./weixin-types.js";
 import { logger } from "./logger.js";
+import { decryptImage } from "./image-decryptor.js";
 
 // 消息去重：记录最近处理过的 message_id
 const recentIds = new Set<number>();
@@ -33,14 +34,19 @@ export class MessageHandler {
       }
     }
 
-    // 提取文本内容
+    // 提取文本内容（可选）
     const textItem = msg.item_list?.find(
       (item) => item.type === MessageItemType.TEXT && item.text_item?.text,
     );
-    if (!textItem?.text_item?.text) return;
+    const text = textItem?.text_item?.text?.trim() || "";
 
-    const text = textItem.text_item.text.trim();
-    if (!text) return;
+    // 提取图片内容（可选）
+    const imageMsgItem = msg.item_list?.find(
+      (item) => item.type === MessageItemType.IMAGE && item.image_item,
+    );
+
+    // 至少要有文本或图片
+    if (!text && !imageMsgItem) return;
 
     const sessionId = msg.session_id ?? "default";
     const fromUserId = msg.from_user_id ?? "";
@@ -49,6 +55,7 @@ export class MessageHandler {
     logger.info("收到消息", {
       from: fromUserId,
       text: text.substring(0, 100),
+      hasImage: !!imageMsgItem,
       session: sessionId,
       contextToken: contextToken || "(empty)",
       messageId: msg.message_id,
@@ -59,8 +66,38 @@ export class MessageHandler {
     // 更新会话上下文
     this.sessions.setContextToken(sessionId, contextToken);
 
+    // 构建消息内容
+    let userContent: MessageContent;
+    if (imageMsgItem) {
+      const blocks: Extract<MessageContent, Array<unknown>> = [];
+
+      const decrypted = await decryptImage(imageMsgItem.image_item!);
+      if (decrypted) {
+        blocks.push({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: decrypted.mediaType,
+            data: decrypted.base64Data,
+          },
+        });
+      } else {
+        blocks.push({ type: "text", text: "[图片处理失败，无法识别]" });
+      }
+
+      if (text) {
+        blocks.push({ type: "text", text });
+      } else {
+        blocks.push({ type: "text", text: "请描述这张图片" });
+      }
+
+      userContent = blocks as MessageContent;
+    } else {
+      userContent = text;
+    }
+
     // 添加用户消息到历史
-    this.sessions.addUserMessage(sessionId, text);
+    this.sessions.addUserMessage(sessionId, userContent);
 
     // 发送"正在输入"
     await this.sendTypingIndicator(sessionId, fromUserId, TypingStatus.TYPING);
