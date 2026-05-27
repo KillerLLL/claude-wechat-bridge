@@ -24,11 +24,13 @@ export class ClaudeClient {
     messages: ClaudeMessage[],
     useVision = false,
     searchContext = "",
+    systemPromptOverride?: string,
   ): Promise<string> {
     const model = useVision ? this.visionModel : this.model;
+    const basePrompt = systemPromptOverride ?? this.systemPrompt;
     const system = searchContext
-      ? `${this.systemPrompt}\n\n以下是从互联网搜索到的参考信息，请基于这些信息回答用户的问题：\n\n${searchContext}`
-      : this.systemPrompt;
+      ? `${basePrompt}\n\n以下是从互联网搜索到的参考信息，请基于这些信息回答用户的问题：\n\n${searchContext}`
+      : basePrompt;
 
     const apiMessages = messages.map((m) => ({ role: m.role, content: m.content }));
 

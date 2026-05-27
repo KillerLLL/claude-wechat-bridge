@@ -2,22 +2,20 @@ import type { Config } from "./config.js";
 import type { WeixinApi } from "./weixin-api.js";
 import type { ClaudeClient } from "./claude-client.js";
 import type { SessionStore, MessageContent } from "./session-store.js";
+import type { SessionMode } from "./session-store.js";
 import type { WeixinMessage } from "./weixin-types.js";
 import { MessageType, MessageItemType, TypingStatus } from "./weixin-types.js";
 import { logger } from "./logger.js";
 import { decryptImage } from "./image-decryptor.js";
 import { WebSearchClient } from "./web-search.js";
 
-const SEARCH_KEYWORDS = [
+// 默认搜索触发关键词（当环境变量未配置时使用）
+const DEFAULT_SEARCH_KEYWORDS = [
   "新闻", "最新", "今天", "天气", "时事", "热点", "发生了什么",
   "最近", "当前", "现在", "实时", "行情", "股价", "汇率", "比分",
   "疫情", "通知", "公告", "上映", "播出", "比赛", "结果",
   "多少钱", "价格", "排名", "榜单",
 ];
-
-function needsSearch(text: string): boolean {
-  return SEARCH_KEYWORDS.some((kw) => text.includes(kw));
-}
 
 // 消息去重：记录最近处理过的 message_id
 const recentIds = new Set<number>();
@@ -25,6 +23,7 @@ const MAX_RECENT = 200;
 
 export class MessageHandler {
   private webSearch: WebSearchClient | null;
+  private searchKeywords: string[];
 
   constructor(
     private config: Config,
@@ -36,6 +35,9 @@ export class MessageHandler {
       config.WEB_SEARCH_API_KEY && config.WEB_SEARCH_ENDPOINT
         ? new WebSearchClient(config.WEB_SEARCH_ENDPOINT, config.WEB_SEARCH_API_KEY)
         : null;
+    this.searchKeywords = config.WEB_SEARCH_KEYWORDS
+      ? config.WEB_SEARCH_KEYWORDS.split(",").map((s) => s.trim()).filter(Boolean)
+      : DEFAULT_SEARCH_KEYWORDS;
   }
 
   async onMessage(msg: WeixinMessage): Promise<void> {
@@ -70,6 +72,26 @@ export class MessageHandler {
     const sessionId = msg.session_id ?? "default";
     const fromUserId = msg.from_user_id ?? "";
     const contextToken = msg.context_token ?? "";
+
+    // 模式切换指令检测
+    const { CMD_PRO_MODE, CMD_NORMAL_MODE, REPLY_PRO_MODE, REPLY_NORMAL_MODE, CLAUDE_PRO_SYSTEM_PROMPT } = this.config;
+    if (text === CMD_PRO_MODE || text === CMD_NORMAL_MODE) {
+      const newMode: SessionMode = text === CMD_PRO_MODE ? "pro" : "normal";
+      this.sessions.setMode(sessionId, newMode);
+      this.sessions.clearHistory(sessionId);
+      const reply = newMode === "pro" ? REPLY_PRO_MODE : REPLY_NORMAL_MODE;
+
+      this.sessions.addUserMessage(sessionId, text);
+      this.sessions.addAssistantMessage(sessionId, reply);
+      this.sessions.setContextToken(sessionId, contextToken);
+      try {
+        await this.weixinApi.sendMessage(fromUserId, contextToken, reply);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        logger.error("发送模式切换回复失败", { error: errMsg });
+      }
+      return;
+    }
 
     logger.info("收到消息", {
       from: fromUserId,
@@ -128,13 +150,15 @@ export class MessageHandler {
     try {
       // 关键词触发搜索
       let searchContext = "";
-      if (this.webSearch && text && needsSearch(text)) {
+      if (this.webSearch && text && this.searchKeywords.some((kw) => text.includes(kw))) {
         logger.info("触发联网搜索", { query: text });
         searchContext = await this.webSearch.search(text);
       }
 
       const history = this.sessions.getMessages(sessionId);
-      response = await this.claudeClient.generateResponse(history, useVision, searchContext);
+      const mode = this.sessions.getMode(sessionId);
+      const systemOverride = mode === "pro" ? this.config.CLAUDE_PRO_SYSTEM_PROMPT : undefined;
+      response = await this.claudeClient.generateResponse(history, useVision, searchContext, systemOverride);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       logger.error("Claude API 调用失败", { error: errMsg });

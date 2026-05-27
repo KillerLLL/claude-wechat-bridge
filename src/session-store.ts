@@ -2,6 +2,8 @@ import type { ContentBlockParam } from "@anthropic-ai/sdk/resources/messages/mes
 
 export type MessageContent = string | ContentBlockParam[];
 
+export type SessionMode = "normal" | "pro";
+
 export interface ClaudeMessage {
   role: "user" | "assistant";
   content: MessageContent;
@@ -12,6 +14,7 @@ interface Session {
   contextToken: string;
   typingTicket?: string;
   lastActivity: number;
+  mode: SessionMode;
 }
 
 export class SessionStore {
@@ -20,7 +23,7 @@ export class SessionStore {
   private getOrCreate(sessionId: string): Session {
     let s = this.sessions.get(sessionId);
     if (!s) {
-      s = { messages: [], contextToken: "", lastActivity: Date.now() };
+      s = { messages: [], contextToken: "", lastActivity: Date.now(), mode: "normal" };
       this.sessions.set(sessionId, s);
     }
     return s;
@@ -56,6 +59,19 @@ export class SessionStore {
 
   getTypingTicket(sessionId: string): string | undefined {
     return this.sessions.get(sessionId)?.typingTicket;
+  }
+
+  getMode(sessionId: string): SessionMode {
+    return this.getOrCreate(sessionId).mode;
+  }
+
+  setMode(sessionId: string, mode: SessionMode): void {
+    this.getOrCreate(sessionId).mode = mode;
+  }
+
+  clearHistory(sessionId: string): void {
+    const s = this.sessions.get(sessionId);
+    if (s) s.messages = [];
   }
 
   trimToMaxHistory(sessionId: string, max: number): void {
